@@ -21,7 +21,7 @@
 ;
 ; contact info at http://2m5.de or email K@2m5.de
 ;
-; Version: 1.0    - 29.07.2017
+; Version: 1.01   - 06.08.2017
 ;
 ; ATTINY26 fuse settings (if other then default):
 ;   8 MHz internal oscillator
@@ -42,8 +42,9 @@
 ;   portb1     PWM to backlight, 0 = on, 1 = off
 ;
 ; Changes:
-;   10.01.2017 start of development
-;   29.07.2017 initial release 1.0
+;   10.01.2017       start of development
+;   29.07.2017 1.0   initial release
+;   06.08.2017 1.01  force set function to default
  
             .NOLIST
             .INCLUDE "tn26def.inc"
@@ -112,7 +113,7 @@
 ; Configuration
 ;
 ;   internal
-.EQU  cf_osccal   =0xff       ;0xff  oscillator calibration - 0xff = don't set
+.EQU  cf_osccal   =0xa0       ;0xff  oscillator calibration - 0xff = don't set
 ;   I2C
 .EQU  cf_lcd_nmbr =1          ;1     1         or 2 LCD controllers 
 .EQU  cf_i2c_adr  =0x20       ;0x20  0x20-0x23 or 0x20-027 (0x24-0x27 = enable 2)
@@ -222,9 +223,8 @@ wrt_bufe:                     ;end of buffer
    rjmp  illegal     ; Timer1 overflow handler
    rjmp  illegal     ; Timer0 overflow handler
    rjmp  i2c_start   ; USI start
-   in    s,sreg      ; USI overflow - save flags
-   ijmp              ;    - dispatch according to state
-                     ; EEPROM ready vector not available
+   ijmp              ; USI overflow - dispatch to state
+   rjmp  illegal     ; EEPROM ready vector
    rjmp  illegal     ; Analog comparator
    rjmp  illegal     ; ADC conversion complete
 
@@ -315,6 +315,7 @@ i2c_start:
 ; state 1 = address compare
 ;
 i2c_adm:    
+   in    s,sreg            ;save flags
    in    i,usidr           ;address match?
    eor   i,i2c_adr
    cpi   i,(cf_lcd_nmbr<<2);number of LCD controllers * 4
@@ -348,7 +349,6 @@ i2c_aack:
    mov   wrt_ack,zero      ;send ack after write
    ldi   xl,wrt_buf        ;reset buffer pointers
    ldi   yl,wrt_buf
-   out   sreg,s
    reti
 
 ;common exit to drop to idle
@@ -372,7 +372,6 @@ i2c_write:
    ldiz  i2c_wack          ;state: acknowledge (write data)
    out   tcnt1,zero        ;start timeout
    st    x+,i              ;buffer output to LCD
-   out   sreg,s
    reti
 ;
 ; state 4 = ack for write data or command sent
@@ -380,6 +379,7 @@ i2c_write:
 i2c_wack:
    cbi   i2c_ddr,i2c_sda   ;sda is input for a master write
    out   usisr,i2c_clr8    ;clear flags -start, clock 8 bits
+   in    s,sreg            ;save flags
    ldiz  i2c_write         ;state: write data
    cpi   xl,wrt_bufe-1     ;buffer limit?
    ifeq  i_wack_limit
@@ -396,12 +396,12 @@ i2c_read:
    out   usidr,zero
    out   usisr,i2c_clr1    ;clear flags -start, count 1 bit
    ldiz   i2c_rack         ;state: read ack
-   out   sreg,s
    reti
 ;
 ; state 6 = ack/nak for read received (ack sent after address) LCD 1 or 2
 ;
 i2c_rack:
+   in    s,sreg            ;save flags
    in    i,usidr           ;test previous ack
    tst   i
    brne  i_ovidl           ;nak - drop to idle
@@ -541,6 +541,7 @@ reset:
 ;
 ; handles the following items:
 ;   writes buffer to LCD with busy and timeout
+;   checks for LCD busy after start condition
 ;   times backlight
 ;
    do    main
@@ -557,7 +558,7 @@ reset:
                andi  b,0xe0            ;is set function?
                cpi   b,0x20
                ifeq  m_wrt_sf
-                  sbr   a,0x10            ;force 8 bit mode
+                  ldi   a,cf_lcd_rs_sf    ;force default
                end   m_wrt_sf
             end   m_wrt_cmd
             out   lcd_out,a
